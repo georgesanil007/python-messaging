@@ -201,8 +201,28 @@ class MMSMessage:
                     audio_node.setAttribute('begin', str(begin))
                     audio_node.setAttribute('end', str(end))
 
-                par_node.appendChild(text_node)
                 par_node.appendChild(audio_node)
+
+            if page.video is not None:
+                part, begin, end = page.video
+                if 'Content-Location' in part.headers:
+                    src = part.headers['Content-Location']
+                elif 'Content-ID' in part.headers:
+                    src = part.headers['Content-ID']
+                else:
+                    src = part.data
+
+                video_node = smil_doc.createElement('video')
+                video_node.setAttribute('src', src)
+                video_node.setAttribute('region', 'Image')
+                if begin > 0 or end > 0:
+                    if end > page.duration:
+                        end = page.duration
+
+                    video_node.setAttribute('begin', str(begin))
+                    video_node.setAttribute('end', str(end))
+
+                par_node.appendChild(video_node)
 
             body_node.appendChild(par_node)
 
@@ -282,11 +302,12 @@ class MMSMessagePage:
         self.image = None
         self.audio = None
         self.text = None
+        self.video = None
 
     @property
     def data_parts(self):
         """Returns a list of the data parst in this slide"""
-        return [part for part in (self.image, self.audio, self.text)
+        return [part for part in (self.image, self.audio, self.text, self.video)
                     if part is not None]
 
     def number_of_parts(self):
@@ -296,7 +317,7 @@ class MMSMessagePage:
         @rtype: int
         """
         num_parts = 0
-        for item in (self.image, self.audio, self.text):
+        for item in (self.image, self.audio, self.text, self.video):
             if item is not None:
                 num_parts += 1
 
@@ -376,6 +397,42 @@ class MMSMessagePage:
 
         self.audio = (DataPart(filename), time_begin, time_end)
 
+    def add_video(self, filename, time_begin=0, time_end=0):
+        """
+        Adds an video clip to this slide.
+
+        :param filename: The name of the video file to add. Currently the only
+                         supported format is AMR.
+        :type filename: str
+        :param time_begin: The time (in milliseconds) during the duration of
+                          this slide to begin playback of the video clip. If
+                          this is 0 or less, the video clip will be played the
+                          moment the slide is opened.
+        :type time_begin: int
+        :param time_end: The time (in milliseconds) during the duration of this
+                        slide at which to stop playing (i.e. mute) the video
+                        clip. If this is 0 or less, or if it is greater than
+                        the actual duration of this slide, the entire video
+                        clip will be played, or until the next slide is
+                        accessed.
+        :type time_end: int
+        :raise TypeError: An inappropriate variable type was passed in of the
+                          parameters
+        """
+        if not isinstance(filename, str):
+            raise TypeError("filename must be a string")
+
+        if not isinstance(time_begin, int) or not isinstance(time_end, int):
+            raise TypeError("time_begin and time_end must be ints")
+
+        if not os.path.isfile(filename):
+            raise OSError("filename must be a file")
+
+        if time_end > 0 and time_end < time_begin:
+            raise ValueError('time_end cannot be lower than time_begin')
+
+        self.video = (DataPart(filename), time_begin, time_end)
+
     def add_text(self, text, time_begin=0, time_end=0):
         """
         Adds a block of text to this slide.
@@ -430,7 +487,7 @@ class MMSMessagePage:
         self.duration = duration
 
 
-class DataPart(object):
+class DataPart:
     """
     I am a data entry in the MMS body
 
@@ -544,11 +601,11 @@ class DataPart(object):
         """A buffer containing the binary data of this part"""
         if self._data is not None:
             if type(self._data) == array.array:
-                self._data = self._data.tostring()
+                self._data = self._data.tobytes()
             return self._data
 
         elif self._filename is not None:
-            with open(self._filename, 'r') as f:
+            with open(self._filename, 'rb') as f:
                 self._data = f.read()
             return self._data
 
