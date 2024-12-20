@@ -44,11 +44,11 @@ References used in the code and this document:
 
 import array
 from datetime import datetime
+import logging
 
-from messaging.utils import debug
 from messaging.mms.iterator import PreviewIterator
 
-wsp_pdu_types = {
+WSP_PDU_TYPES = {
     0x01: 'Connect',
     0x02: 'ConnectReply',
     0x03: 'Redirect',
@@ -63,7 +63,7 @@ wsp_pdu_types = {
 }
 
 # Well-known parameter assignments ([5], table 38)
-well_known_parameters = {
+WELL_KNOWN_PARAMETERS = {
     0x00: ('Q', 'q_value'),
     0x01: ('Charset', 'well_known_charset'),
     0x02: ('Level', 'version_value'),
@@ -97,7 +97,7 @@ well_known_parameters = {
 
 
 # Content type assignments ([5], table 40)
-well_known_content_types = [
+WELL_KNOWN_CONTENT_TYPES = [
     '*/*', 'text/*', 'text/html', 'text/plain',
     'text/x-hdml', 'text/x-ttml', 'text/x-vCalendar',
     'text/x-vCard', 'text/vnd.wap.wml',
@@ -164,7 +164,7 @@ well_known_content_types = [
 # Note that the assigned number is the same as the IANA MIBEnum value
 # "gsm-default-alphabet" is not included, as it is not assigned any
 # value in [5]. Also note, this is by no means a complete list
-well_known_charsets = {
+WELL_KNOWN_CHARSETS = {
     0x07EA: 'big5',
     0x03E8: 'iso-10646-ucs-2',
     0x04: 'iso-8859-1',
@@ -182,7 +182,7 @@ well_known_charsets = {
 }
 
 # Header Field Name assignments ([5], table 39)
-header_field_names = [
+HEADER_FIELD_NAMES = [
     'Accept', 'Accept-Charset', 'Accept-Encoding',
     'Accept-Language', 'Accept-Ranges', 'Age',
     'Allow', 'Authorization', 'Cache-Control',
@@ -214,11 +214,11 @@ header_field_names = [
 ]
 
 
-# TODO: combine this dict with the header_field_names table (same as well
+# TODO: combine this dict with the HEADER_FIELD_NAMES table (same as well
 # known parameter assignments)
 # Temporary fix to allow different types of header field values to be
 # dynamically decoded
-header_field_encodings = {'Accept': 'accept_value', 'Pragma': 'pragma_value'}
+HEADER_FIELD_ENCODINGS = {'Accept': 'accept_value', 'Pragma': 'pragma_value'}
 
 
 def get_header_field_names(version='1.2'):
@@ -243,7 +243,7 @@ def get_header_field_names(version='1.2'):
 
     version = int(version.split('.')[1])
 
-    versioned_field_names = header_field_names[:]
+    versioned_field_names = HEADER_FIELD_NAMES[:]
     if version == 3:
         versioned_field_names = versioned_field_names[:0x44]
     elif version == 2:
@@ -281,7 +281,7 @@ def get_well_known_parameters(version='1.2'):
     else:
         version = int(version.split('.')[1])
 
-    versioned_params = well_known_parameters.copy()
+    versioned_params = WELL_KNOWN_PARAMETERS.copy()
     if version <= 3:
         for assigned_number in range(0x11, 0x1e):
             del versioned_params[assigned_number]
@@ -331,7 +331,7 @@ class Decoder:
         :rtype: int
         """
         # Make the byte unsigned
-        return byte_iter.next() & 0xf
+        return next(byte_iter) & 0xf
 
     @staticmethod
     def decode_uint_var(byte_iter):
@@ -353,11 +353,11 @@ class Decoder:
         :rtype: int
         """
         uint = 0
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         while (byte >> 7) == 0x01:
             uint = uint << 7
             uint |= byte & 0x7f
-            byte = byte_iter.next()
+            byte = next(byte_iter)
 
         uint = uint << 7
         uint |= byte & 0x7f
@@ -388,7 +388,7 @@ class Decoder:
             byte_iter.reset_preview()
             raise DecodeError('Not a valid short-integer: MSB not set')
 
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         return byte & 0x7f
 
     @staticmethod
@@ -447,14 +447,14 @@ class Decoder:
 
         longInt = 0
         # Decode the Multi-octect-integer
-        for i in xrange(shortLength):
+        for i in range(shortLength):
             longInt = longInt << 8
-            longInt |= byte_iter.next()
+            longInt |= next(byte_iter)
 
         return longInt
 
     @staticmethod
-    def decode_text_string(byte_iter):
+    def decode_text_string(byte_iter, encoding = 'utf-8'):
         """
         Decodes the null-terminated, binary-encoded string value starting
         at the byte pointed to by ``byte_iter``.
@@ -473,17 +473,22 @@ class Decoder:
         :return: The decoded text string
         :rtype: str
         """
-        decoded_string = ''
-        byte = byte_iter.next()
+        b_decoded_string = b''
+        byte = next(byte_iter)
         # Remove Quote character (octet 127), if present
         if byte == 127:
-            byte = byte_iter.next()
+            byte = next(byte_iter)
 
         while byte != 0x00:
-            decoded_string += chr(byte)
-            byte = byte_iter.next()
+            b_decoded_string += bytes([byte])
+            byte = next(byte_iter)
 
-        return decoded_string
+        try:
+            # Lets try to decode it to the given encoding
+            # if that fails we probably have characters that need to be escaped
+            return b_decoded_string.decode(encoding)
+        except UnicodeError:
+            return b_decoded_string.decode("unicode_escape")
 
     @staticmethod
     def decode_quoted_string(byte_iter):
@@ -505,7 +510,7 @@ class Decoder:
             raise DecodeError('Invalid quoted string: must '
                               'start with <octect 34>')
 
-        byte_iter.next()
+        next(byte_iter)
         # CHECK: should the quotation chars be pre- and appended before
         # returning *technically* we should not check for quote characters.
         return Decoder.decode_text_string(byte_iter)
@@ -528,10 +533,10 @@ class Decoder:
             byte_iter.reset_preview()
             raise DecodeError('Invalid token')
 
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         while byte > 31 and byte not in separators:
             token += chr(byte)
-            byte = byte_iter.next()
+            byte = next(byte_iter)
 
         return token
 
@@ -561,10 +566,10 @@ class Decoder:
             raise DecodeError('Invalid Extension-media: TEXT '
                               'starts with invalid character: %d' % byte)
 
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         while byte != 0x00:
             media_value += chr(byte)
-            byte = byte_iter.next()
+            byte = next(byte_iter)
 
         return media_value
 
@@ -614,7 +619,7 @@ class Decoder:
             raise DecodeError('Not a valid short-length: '
                               'should be in octet range 0-30')
 
-        return byte_iter.next()
+        return next(byte_iter)
 
     @staticmethod
     def decode_value_length(byte_iter):
@@ -646,7 +651,7 @@ class Decoder:
             byte = byte_iter.preview()
             # CHECK: this strictness MAY cause issues, but it is correct
             if byte == 31:
-                byte_iter.next()  # skip past the length-quote
+                next(byte_iter)  # skip past the length-quote
                 length_value = Decoder.decode_uint_var(byte_iter)
             else:
                 byte_iter.reset_preview()
@@ -759,7 +764,7 @@ class Decoder:
                               'integer value representing it')
 
         try:
-            return well_known_content_types[value]
+            return WELL_KNOWN_CONTENT_TYPES[value]
         except IndexError:
             raise DecodeError('Invalid well-known media: could not '
                               'find content type in table of assigned values')
@@ -804,12 +809,12 @@ class Decoder:
         """
         try:
             media_value = Decoder.decode_constrained_encoding(byte_iter)
-        except DecodeError, msg:
-            raise DecodeError('Invalid Constrained-media: %s' % msg)
+        except DecodeError as e:
+            raise DecodeError('Invalid Constrained-media: %s' % e)
 
         if isinstance(media_value, int):
             try:
-                return well_known_content_types[media_value]
+                return WELL_KNOWN_CONTENT_TYPES[media_value]
             except IndexError:
                 raise DecodeError('Invalid constrained media: could not '
                                   'find well-known content type')
@@ -843,8 +848,8 @@ class Decoder:
 
         # Read parameters, etc, until <value_length> is reached
         ct_field_bytes = array.array('B')
-        for i in xrange(value_length):
-            ct_field_bytes.append(byte_iter.next())
+        for i in range(value_length):
+            ct_field_bytes.append(next(byte_iter))
 
         ct_iter = PreviewIterator(ct_field_bytes)
         # Now, decode all the bytes read
@@ -898,10 +903,10 @@ class Decoder:
         typed_value = ''
         try:
             typed_value = getattr(Decoder, 'decode_%s' % value_type)(byte_iter)
-        except DecodeError, msg:
-            raise DecodeError('Could not decode Typed-parameter: %s' % msg)
+        except DecodeError as e:
+            raise DecodeError('Could not decode Typed-parameter: %s' % e)
         except:
-            debug('A fatal error occurred, probably due to an '
+            logging.error('A fatal error occurred, probably due to an '
                   'unimplemented decoding operation')
             raise
 
@@ -1186,11 +1191,11 @@ class Decoder:
         :return: No-value, which is 0x00
         :rtype: int
         """
-        byte_iter, local_iter = byte_iter.next()
-        if local_iter.next() != 0x00:
+        byte_iter, local_iter = next(byte_iter)
+        if next(local_iter) != 0x00:
             raise DecodeError('Expected No-value')
 
-        byte_iter.next()
+        next(byte_iter)
         return 0x00
 
     @staticmethod
@@ -1226,7 +1231,7 @@ class Decoder:
 
             # Check for the Q-Token (to see if there are Accept-parameters)
             if byte_iter.preview() == 128:
-                byte_iter.next()
+                next(byte_iter)
                 q_value = Decoder.decode_q_value(byte_iter)
                 try:
                     accept_extension = Decoder.decode_parameter(byte_iter)
@@ -1260,7 +1265,7 @@ class Decoder:
         """
         byte = byte_iter.preview()
         if byte == 0x80:  # No-cache
-            byte_iter.next()
+            next(byte_iter)
             # TODO: Not sure if this parameter name (or even usage) is correct
             name, value = 'Cache-control', 'No-cache'
         else:
@@ -1286,12 +1291,12 @@ class Decoder:
         byte = byte_iter.preview()
         byte_iter.reset_preview()
         if byte == 127:
-            byte_iter.next()
+            next(byte_iter)
             decoded_charset = '*'
         else:
             charset_value = Decoder.decode_integer_value(byte_iter)
-            if charset_value in well_known_charsets:
-                decoded_charset = well_known_charsets[charset_value]
+            if charset_value in WELL_KNOWN_CHARSETS:
+                decoded_charset = WELL_KNOWN_CHARSETS[charset_value]
             else:
                 # This charset is not in our table... so just use the
                 # value (at least for now)
@@ -1319,7 +1324,7 @@ class Decoder:
         hdr_fields = get_header_field_names()
         # TODO: *technically* this can fail, but then we have already
         # read a byte... should fix?
-        if field_value not in xrange(len(hdr_fields)):
+        if field_value not in list(range(len(hdr_fields))):
             raise DecodeError('Invalid Header Field value: %d' % field_value)
 
         field_name = hdr_fields[field_value]
@@ -1328,15 +1333,15 @@ class Decoder:
         # decode_application_header also
         # Currently we decode most headers as text_strings, except
         # where we have a specific decoding algorithm implemented
-        if field_name in header_field_encodings:
-            wap_value_type = header_field_encodings[field_name]
+        if field_name in HEADER_FIELD_ENCODINGS:
+            wap_value_type = HEADER_FIELD_ENCODINGS[field_name]
             try:
                 decoded_value = getattr(Decoder,
                                        'decode_%s' % wap_value_type)(byte_iter)
-            except DecodeError, msg:
-                raise DecodeError('Could not decode Wap-value: %s' % msg)
+            except DecodeError as e:
+                raise DecodeError('Could not decode Wap-value: %s' % e)
             except:
-                debug('An error occurred, probably due to an '
+                logging.error('An error occurred, probably due to an '
                       'unimplemented decoding operation. Tried to '
                       'decode header: %s' % field_name)
                 raise
@@ -1372,6 +1377,7 @@ class Decoder:
             app_header = Decoder.decode_text_string(byte_iter)
 
         app_specific_value = Decoder.decode_text_string(byte_iter)
+
         return app_header, app_specific_value
 
     @staticmethod
@@ -1606,10 +1612,10 @@ class Encoder:
                  values
         :rtype: list
         """
-        if content_type in well_known_content_types:
+        if content_type in WELL_KNOWN_CONTENT_TYPES:
             # Short-integer encoding
             val = Encoder.encode_short_integer(
-                    well_known_content_types.index(content_type))
+                    WELL_KNOWN_CONTENT_TYPES.index(content_type))
         else:
             val = Encoder.encode_text_string(content_type)
 
@@ -1664,10 +1670,10 @@ class Encoder:
                     ret = getattr(Encoder,
                                   'encode_%s' % expected_type)(parameter_value)
                     encoded_parameter.extend(ret)
-                except EncodeError, msg:
-                    raise EncodeError('Error encoding param value: %s' % msg)
+                except EncodeError as e:
+                    raise EncodeError('Error encoding param value: %s' % e)
                 except:
-                    debug('A fatal error occurred, probably due to an '
+                    logging.error('A fatal error occurred, probably due to an '
                           'unimplemented encoding operation')
                     raise
                 break
@@ -1794,15 +1800,15 @@ class Encoder:
         # TODO: make this flow better (see also Decoder.decode_header)
         # most header values are encoded as text_strings, except where we
         # have a specific Wap-value encoding implementation
-        if field_name in header_field_encodings:
-            wap_value_type = header_field_encodings[field_name]
+        if field_name in HEADER_FIELD_ENCODINGS:
+            wap_value_type = HEADER_FIELD_ENCODINGS[field_name]
             try:
                 ret = getattr(Encoder, 'encode_%s' % wap_value_type)(value)
                 encoded_header.extend(ret)
-            except EncodeError, msg:
-                raise EncodeError('Error encoding Wap-value: %s' % msg)
+            except EncodeError as e:
+                raise EncodeError('Error encoding Wap-value: %s' % e)
             except:
-                debug('A fatal error occurred, probably due to an '
+                logging.error('A fatal error occurred, probably due to an '
                       'unimplemented encoding operation')
                 raise
         else:
@@ -1858,8 +1864,8 @@ class Encoder:
         :rtype: list
         """
         # See if this value is in the table of well-known content types
-        if media_type in well_known_content_types:
-            value = well_known_content_types.index(media_type)
+        if media_type in WELL_KNOWN_CONTENT_TYPES:
+            value = WELL_KNOWN_CONTENT_TYPES.index(media_type)
         else:
             value = media_type
 
@@ -1920,7 +1926,7 @@ class Encoder:
         :return: The encoded media type value, as a sequence of bytes
         :rtype: str
         """
-        if not isinstance(media_value, basestring):
+        if not isinstance(media_value, str):
             try:
                 media_value = str(media_value)
             except:
@@ -2045,8 +2051,8 @@ class Encoder:
             # ...now try Accept-general-form
             try:
                 encoded_media_range = Encoder.encode_media_type(accept_value)
-            except EncodeError, msg:
-                raise EncodeError('Cannot encode Accept-value: %s' % msg)
+            except EncodeError as e:
+                raise EncodeError('Cannot encode Accept-value: %s' % e)
 
             value_length = Encoder.encode_value_length(len(encoded_media_range))
             encoded_accept_value = value_length
