@@ -15,8 +15,8 @@ from __future__ import with_statement
 import array
 import os
 import random
+import logging
 
-from messaging.utils import debug
 from messaging.mms import message, wsp_pdu
 from messaging.mms.iterator import PreviewIterator
 
@@ -25,7 +25,7 @@ def flatten_list(x):
     """Flattens ``x`` into a single list"""
     result = []
     for el in x:
-        if hasattr(el, "__iter__") and not isinstance(el, basestring):
+        if hasattr(el, "__iter__") and not isinstance(el, str):
             result.extend(flatten_list(el))
         else:
             result.append(el)
@@ -167,7 +167,7 @@ class MMSDecoder(wsp_pdu.Decoder):
         except StopIteration:
             return
 
-        #print 'Number of data entries (parts) in MMS body:', num_entries
+        logging.debug('Number of data entries (parts) in MMS body: %i' % num_entries)
 
         ########## MMS body: entries ##########
         # For every data "part", we have to read the following sequence:
@@ -175,15 +175,15 @@ class MMSDecoder(wsp_pdu.Decoder):
         # <length of data>,
         # <content-type + other possible headers>,
         # <data>
-        for part_num in xrange(num_entries):
-            #print '\nPart %d:\n------' % part_num
+        for part_num in range(num_entries):
+            logging.debug('\nPart %d:\n------' % part_num)
             headers_len = self.decode_uint_var(data_iter)
             data_len = self.decode_uint_var(data_iter)
 
             # Prepare to read content-type + other possible headers
             ct_field_bytes = []
-            for i in xrange(headers_len):
-                ct_field_bytes.append(data_iter.next())
+            for i in range(headers_len):
+                ct_field_bytes.append(next(data_iter))
 
             ct_iter = PreviewIterator(ct_field_bytes)
             # Get content type
@@ -201,8 +201,8 @@ class MMSDecoder(wsp_pdu.Decoder):
 
             # Data (note: this is not null-terminated)
             data = array.array('B')
-            for i in xrange(data_len):
-                data.append(data_iter.next())
+            for i in range(data_len):
+                data.append(next(data_iter))
 
             part = message.DataPart()
             part.set_data(data, ctype)
@@ -269,7 +269,7 @@ class MMSDecoder(wsp_pdu.Decoder):
         byte = wsp_pdu.Decoder.decode_short_integer_from_byte(preview)
 
         if byte in mms_field_names:
-            byte_iter.next()
+            next(byte_iter)
             mms_field_name = mms_field_names[byte][0]
         else:
             byte_iter.reset_preview()
@@ -281,11 +281,11 @@ class MMSDecoder(wsp_pdu.Decoder):
         try:
             name = mms_field_names[byte][1]
             mms_value = getattr(MMSDecoder, 'decode_%s' % name)(byte_iter)
-        except wsp_pdu.DecodeError, msg:
+        except wsp_pdu.DecodeError as e:
             raise wsp_pdu.DecodeError('Invalid MMS Header: Could '
-                                      'not decode MMS-value: %s' % msg)
+                                      'not decode MMS-value: %s' % e)
         except:
-            raise RuntimeError('A fatal error occurred, probably due to an '
+            print('A fatal error occurred, probably due to an '
                                'unimplemented decoding operation. Tried to '
                                'decode header: %s' % mms_field_name)
 
@@ -316,11 +316,11 @@ class MMSDecoder(wsp_pdu.Decoder):
             # TODO: add proper support for charsets...
             try:
                 charset = wsp_pdu.Decoder.decode_well_known_charset(byte_iter)
-            except wsp_pdu.DecodeError, msg:
+            except wsp_pdu.DecodeError as e:
                 raise Exception('encoded_string_value decoding error - '
-                                'Could not decode Charset value: %s' % msg)
+                                'Could not decode Charset value: %s' % e)
 
-            return wsp_pdu.Decoder.decode_text_string(byte_iter)
+            return wsp_pdu.Decoder.decode_text_string(byte_iter, charset)
         except wsp_pdu.DecodeError:
             # Fall back on just "Text-string"
             return wsp_pdu.Decoder.decode_text_string(byte_iter)
@@ -350,13 +350,13 @@ class MMSDecoder(wsp_pdu.Decoder):
             byte_iter.reset_preview()
             raise wsp_pdu.DecodeError('Error parsing boolean value '
                                       'for byte: %s' % hex(byte))
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         return byte == 128
 
     @staticmethod
     def decode_delivery_time_value(byte_iter):
         value_length = wsp_pdu.Decoder.decode_value_length(byte_iter)
-        token = byte_iter.next()
+        token = next(byte_iter)
         value = wsp_pdu.Decoder.decode_long_integer(byte_iter)
         if token == 128:
             token_type = 'absolute'
@@ -383,7 +383,7 @@ class MMSDecoder(wsp_pdu.Decoder):
         """
         value_length = wsp_pdu.Decoder.decode_value_length(byte_iter)
         # See what token we have
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         if byte == 129:  # Insert-address-token
             return '<not inserted>'
 
@@ -416,7 +416,7 @@ class MMSDecoder(wsp_pdu.Decoder):
         }
         byte = byte_iter.preview()
         if byte in class_identifiers:
-            byte_iter.next()
+            next(byte_iter)
             return class_identifiers[byte]
 
         byte_iter.reset_preview()
@@ -444,7 +444,7 @@ class MMSDecoder(wsp_pdu.Decoder):
 
         byte = byte_iter.preview()
         if byte in message_types:
-            byte_iter.next()
+            next(byte_iter)
             return message_types[byte]
 
         byte_iter.reset_preview()
@@ -467,7 +467,7 @@ class MMSDecoder(wsp_pdu.Decoder):
 
         byte = byte_iter.preview()
         if byte in priorities:
-            byte = byte_iter.next()
+            byte = next(byte_iter)
             return priorities[byte]
 
         byte_iter.reset_preview()
@@ -498,7 +498,7 @@ class MMSDecoder(wsp_pdu.Decoder):
             raise wsp_pdu.DecodeError('Error parsing sender visibility '
                                       'value for byte: %s' % hex(byte))
 
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         value = 'Hide' if byte == 128 else 'Show'
         return value
 
@@ -529,7 +529,7 @@ class MMSDecoder(wsp_pdu.Decoder):
             0x88: 'Error-unsupported-message',
         }
         byte = byte_iter.preview()
-        byte_iter.next()
+        next(byte_iter)
         # Return error unspecified if it couldn't be decoded
         return response_status_values.get(byte, 0x81)
 
@@ -555,7 +555,7 @@ class MMSDecoder(wsp_pdu.Decoder):
             0x84: 'Unrecognised',
         }
 
-        byte = byte_iter.next()
+        byte = next(byte_iter)
         # Return an unrecognised state if it couldn't be decoded
         return status_values.get(byte, 0x84)
 
@@ -576,7 +576,7 @@ class MMSDecoder(wsp_pdu.Decoder):
         :rtype: str or int
         """
         value_length = MMSDecoder.decode_value_length(byte_iter)
-        token = byte_iter.next()
+        token = next(byte_iter)
 
         if token == 0x80:    # Absolute-token
             return MMSDecoder.decode_date_value(byte_iter)
@@ -695,10 +695,11 @@ class MMSEncoder(wsp_pdu.Encoder):
                     MMSEncoder.encode_header(hdr, headers_to_encode[hdr]))
 
         # Ok, now only "Content-type" should be left
-        content_type, ct_parameters = headers_to_encode['Content-Type']
-        message_header.extend(MMSEncoder.encode_mms_field_name('Content-Type'))
-        ret = MMSEncoder.encode_content_type_value(content_type, ct_parameters)
-        message_header.extend(flatten_list(ret))
+        if 'Content-Type' in headers_to_encode:
+            content_type, ct_parameters = headers_to_encode['Content-Type']
+            message_header.extend(MMSEncoder.encode_mms_field_name('Content-Type'))
+            ret = MMSEncoder.encode_content_type_value(content_type, ct_parameters)
+            message_header.extend(flatten_list(ret))
 
         return message_header
 
@@ -749,12 +750,13 @@ class MMSEncoder(wsp_pdu.Encoder):
         #TODO: enable encoding of MMSs without SMIL file
         ########## MMS body: header ##########
         # Parts: SMIL file + <number of data elements in each slide>
+        if len(self._mms_message._pages) == 0:
+            return message_body
         num_entries = 1
         for page in self._mms_message._pages:
             num_entries += page.number_of_parts()
 
-        for data_part in self._mms_message._data_parts:
-            num_entries += 1
+        num_entries += len(self._mms_message._data_parts)
 
         message_body.extend(self.encode_uint_var(num_entries))
 
@@ -773,7 +775,7 @@ class MMSEncoder(wsp_pdu.Encoder):
         smil_part.headers['Content-ID'] = '<0000>'
         parts = [smil_part]
         for slide in self._mms_message._pages:
-            for part_tuple in (slide.image, slide.audio, slide.text):
+            for part_tuple in (slide.image, slide.audio, slide.text, slide.video):
                 if part_tuple is not None:
                     parts.append(part_tuple[0])
 
@@ -800,7 +802,10 @@ class MMSEncoder(wsp_pdu.Encoder):
             message_body.extend(encoded_part_headers)
             # Data (note: we do not null-terminate this)
             for char in part.data:
-                message_body.append(ord(char))
+                if isinstance(char, int):
+                    message_body.append(char)
+                else:
+                    message_body.append(ord(char))
 
         return message_body
 
@@ -844,11 +849,11 @@ class MMSEncoder(wsp_pdu.Encoder):
                     ret = getattr(MMSEncoder,
                                   'encode_%s' % expected_type)(header_value)
                     encoded_header.extend(ret)
-                except wsp_pdu.EncodeError, msg:
+                except wsp_pdu.EncodeError as e:
                     raise wsp_pdu.EncodeError('Error encoding parameter '
-                                              'value: %s' % msg)
+                                              'value: %s' % e)
                 except:
-                    debug('A fatal error occurred, probably due to an '
+                    logging.error('A fatal error occurred, probably due to an '
                           'unimplemented encoding operation')
                     raise
 
